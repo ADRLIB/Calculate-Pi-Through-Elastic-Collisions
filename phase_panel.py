@@ -1,205 +1,97 @@
-"""Live phase-space plot for the pygame app.
+"""Live phase-space plot for the pygame app, in the style of the original
+matplotlib images ("Pi Collisions for n_digits = N").
 
-Axes are x = sqrt(M) v_big and y = sqrt(m) v_small, scaled so that kinetic
-energy conservation puts every state on the unit circle. In these coordinates:
+Each point is (x, y) = (sqrt(M) * v_big, sqrt(m) * v_small) right after a
+collision, with the big ball starting at speed 1, exactly like the notebook.
+Energy conservation puts every point on a circle of radius sqrt(M).
 
-  * a wall bounce flips v_small, so it is a vertical jump (y -> -y);
-  * a ball-ball collision conserves momentum, so it moves along a line of
-    slope -sqrt(M/m);
-  * each collision advances the point by the same angle around the circle
-    (2*theta per ball-ball + wall pair, theta = arctan sqrt(m/M)), so the
-    number of collisions that fit in the half-turn is about pi / theta.
-
-The panel draws each collision as a dot the moment it happens (colored by
-collision order), the first few collisions as connected lines, the shaded
-"no more collisions" wedge, and a zoomed inset of the first collisions, where
-the zig-zag is otherwise far too small to see.
+How it stays fast enough to update every frame: matplotlib draws the static
+parts (axes, ticks, grid, title, labels) once per run into a pygame surface,
+and we reuse matplotlib's own data->pixel transform to draw the line and
+markers ourselves as each collision happens. The legend is redrawn every
+frame so its collision count is live.
 """
 
-import math
+import os
 
-import numpy as np
-import pygame
+import matplotlib
 
-MAX_POINTS = 20_000     # sample down to about this many dots for large n
-ALL_LINES_UP_TO = 60    # draw every segment when there are this few collisions
-FIRST_LINES = 40        # otherwise connect only the first this many collisions
-INSET_COLLISIONS = 12   # collisions shown in the zoomed inset
+matplotlib.use("Agg")  # render off-screen; pygame owns the window
+from matplotlib.backends.backend_agg import FigureCanvasAgg  # noqa: E402
+from matplotlib.figure import Figure  # noqa: E402
+import numpy as np  # noqa: E402
+import pygame  # noqa: E402
 
-PANEL_BG = (255, 255, 255)
-BORDER = (225, 220, 216)
-GRID = (232, 230, 228)
-CIRCLE = (190, 190, 190)
-INK = (30, 30, 30)
-MUTED = (120, 120, 120)
-DONE_FILL = (46, 139, 87, 70)
-DONE_EDGE = (46, 139, 87)
+MAX_POINTS = 20_000  # for large n, plot about this many collisions (every k-th)
 
-# Viridis colormap anchors (dark purple -> yellow) for "collision order"
-_VIRIDIS = np.array(
-    [(68, 1, 84), (59, 82, 139), (33, 145, 140), (94, 201, 98), (253, 231, 37)], dtype=float
-)
-
-
-def viridis(fractions):
-    """Map values in [0, 1] to RGB rows."""
-    f = np.clip(np.asarray(fractions, dtype=float), 0.0, 1.0) * (len(_VIRIDIS) - 1)
-    i = np.minimum(f.astype(int), len(_VIRIDIS) - 2)
-    t = (f - i)[:, None]
-    return (_VIRIDIS[i] * (1 - t) + _VIRIDIS[i + 1] * t).astype(int)
-
-
-def first_velocities(m1, m2, count):
-    """(v_small, v_big) after each of the first `count` collisions, starting at (0, -1)."""
-    v1, v2 = 0.0, -1.0
-    out = [(v1, v2)]
-    total = m1 + m2
-    for _ in range(count):
-        if v2 < v1:
-            v1, v2 = ((m1 - m2) * v1 + 2 * m2 * v2) / total, ((m2 - m1) * v2 + 2 * m1 * v1) / total
-        elif v1 < 0:
-            v1 = -v1
-        else:
-            break
-        out.append((v1, v2))
-    return out
+# Original images were 6x6 inch figures; render the same layout scaled to the panel
+FIG_INCHES = 6.0
+LINE_BLUE = (31, 119, 180)  # matplotlib's default "C0" blue
+LEGEND_EDGE = (204, 204, 204)
+TEXT = (0, 0, 0)
+FONT_PATH = os.path.join(matplotlib.get_data_path(), "fonts", "ttf", "DejaVuSans.ttf")
 
 
 class PhasePanel:
-    def __init__(self, rect, sim, total_collisions, font, small_font):
+    def __init__(self, rect, sim, total_collisions):
         self.rect = pygame.Rect(rect)
         self.sim = sim
         self.total = max(1, total_collisions)
-        self.font = font
-        self.small_font = small_font
+        self.n_digits = sim.n_digits
+        self.radius = float(np.sqrt(sim.m_big))  # circle radius in plot units
 
-        # Which collisions to plot (the engine samples them for us)
-        self.line_limit = self.total if self.total <= ALL_LINES_UP_TO else FIRST_LINES
-        stride = max(1, self.total // MAX_POINTS)
-        # Collisions alternate ball-ball / wall, so an even stride would only ever
-        # sample wall bounces (all in the upper half). Keep it odd.
-        stride |= 1
-        sim.enable_recording(stride=stride, dense=max(self.line_limit, INSET_COLLISIONS))
-        self.dot_radius = 3 if self.total < 100 else 1
+        # Sample down for big n. Collisions alternate ball-ball / wall, so keep
+        # the stride odd or we'd only ever see one kind (half the circle).
+        stride = max(1, self.total // MAX_POINTS) | 1
+        sim.enable_recording(stride=stride, dense=0)
 
-        # Geometry (panel-local pixels)
-        header = 52
-        self.radius = (min(self.rect.w, self.rect.h - header) - 34) / 2
-        self.center = (self.rect.w / 2, header + (self.rect.h - header) / 2)
+        dpi = self.rect.w / FIG_INCHES
+        self.scale = dpi / 72.0  # points -> pixels, for line widths/marker sizes
+        # The plot is drawn incrementally onto one persistent surface: matplotlib's
+        # axes underneath, then each frame's new line segments and markers on top.
+        self.canvas, self._to_px, self.axes_rect = self._render_axes(dpi)
+        self.canvas.set_clip(self.axes_rect)
 
-        self.background = self._render_background()
-        self.trail = pygame.Surface(self.rect.size, pygame.SRCALPHA)
+        # matplotlib defaults: linewidth 1.5 pt, marker 'o' size 6 pt
+        self.line_width = max(1, round(1.5 * self.scale))
+        self.marker_radius = max(1, round(3 * self.scale))
+        self.legend_font = pygame.font.Font(FONT_PATH, max(8, round(10 * self.scale)))
+        # One pre-drawn marker, stamped with a single batched blits() call per frame
+        d = 2 * self.marker_radius + 1
+        self.marker = pygame.Surface((d, d), pygame.SRCALPHA)
+        pygame.draw.circle(self.marker, LINE_BLUE, (self.marker_radius, self.marker_radius), self.marker_radius)
+        self.last_px = None
 
-        start = sim.phase_point(sim.v_small, sim.v_big)
-        self.prev = (0, start)  # (collision index, phase point)
-        self.inset_points = [start]
-        self.inset = self._setup_inset() if self.total > ALL_LINES_UP_TO else None
+    # ----- static layer (matplotlib) -----
+    def _render_axes(self, dpi):
+        size = self.rect.w / dpi, self.rect.h / dpi
+        fig = Figure(figsize=size, dpi=dpi)
+        canvas = FigureCanvasAgg(fig)
+        ax = fig.add_subplot()
+        # Fixed limits (matplotlib would autoscale to the finished data; we draw live)
+        lim = 1.1 * self.radius
+        ax.set_xlim(-lim, lim)
+        ax.set_ylim(-lim, lim)
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_title(f"Pi Collisions for n_digits = {self.n_digits}")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.grid(True)
+        fig.tight_layout()
+        canvas.draw()
 
-    # ----- coordinates -----
-    def to_px(self, x, y):
-        cx, cy = self.center
-        return (cx + x * self.radius, cy - y * self.radius)
+        width, height = canvas.get_width_height()
+        surface = pygame.image.frombytes(bytes(canvas.buffer_rgba()), (width, height), "RGBA")
 
-    # ----- static layer -----
-    def _render_background(self):
-        surf = pygame.Surface(self.rect.size, pygame.SRCALPHA)
-        surf.fill(PANEL_BG)
-        pygame.draw.rect(surf, BORDER, surf.get_rect(), 1)
-        cx, cy = self.center
-        r = self.radius
+        transform = ax.transData  # data -> display pixels (origin bottom-left)
 
-        # axes
-        pygame.draw.line(surf, GRID, (cx - r - 8, cy), (cx + r + 8, cy))
-        pygame.draw.line(surf, GRID, (cx, cy - r - 8), (cx, cy + r + 8))
+        def to_px(xs, ys):
+            pts = transform.transform(np.column_stack([xs, ys]))
+            return pts[:, 0], height - pts[:, 1]
 
-        # "no more collisions" wedge: 0 <= v_small <= v_big, i.e. angle in [0, theta]
-        theta = self.sim.theta
-        arc = [self.to_px(math.cos(a), math.sin(a)) for a in np.linspace(0, theta, 24)]
-        wedge = pygame.Surface(self.rect.size, pygame.SRCALPHA)
-        pygame.draw.polygon(wedge, DONE_FILL, [self.center] + arc)
-        surf.blit(wedge, (0, 0))
-        pygame.draw.line(surf, DONE_EDGE, self.center, arc[-1], 1)
-
-        # energy circle: every state must lie on it
-        pygame.draw.circle(surf, CIRCLE, (round(cx), round(cy)), round(r), 1)
-
-        # labels
-        surf.blit(self.font.render("Phase space", True, INK), (10, 6))
-        subtitle = f"θ = arctan√(m/M) = {theta:.3g} rad    π/θ = {math.pi / theta:,.2f}"
-        surf.blit(self.small_font.render(subtitle, True, MUTED), (10, 30))
-        x_label = self.small_font.render("√M·v_big", True, MUTED)
-        surf.blit(x_label, x_label.get_rect(topright=(self.rect.w - 6, cy + 4)))
-        y_label = self.small_font.render("√m·v_small", True, MUTED)
-        surf.blit(y_label, y_label.get_rect(bottomleft=(cx + 5, cy - r - 2)))
-        done = self.small_font.render("done", True, DONE_EDGE)
-        surf.blit(done, done.get_rect(bottomright=(self.rect.w - 6, cy - 18)))
-        return surf
-
-    # ----- zoom inset -----
-    def _setup_inset(self):
-        """Fix the inset's view around the first INSET_COLLISIONS states.
-
-        Near the start the zig-zag is tiny and nearly vertical, so the inset
-        stretches x (and says by how much) to make its shape readable.
-        """
-        sim = self.sim
-        pts = [sim.phase_point(v1 * abs(sim.v0), v2 * abs(sim.v0))
-               for v1, v2 in first_velocities(sim.m_small, sim.m_big, INSET_COLLISIONS)]
-        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
-        x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
-        x_span = max(x1 - x0, 1e-300)
-        y_span = max(y1 - y0, 1e-300)
-        size = round(self.radius * 0.8)
-        box = pygame.Rect(0, 0, size, size)
-        box.center = (round(self.center[0] + self.radius * 0.28), round(self.center[1]))
-        pad = 0.12
-        return {
-            "box": box,
-            "x0": x0 - pad * x_span, "x_span": x_span * (1 + 2 * pad),
-            "y0": y0 - pad * y_span, "y_span": y_span * (1 + 2 * pad),
-            "stretch": y_span / x_span,
-            "region": (x0, x1, y0, y1),
-        }
-
-    def _inset_px(self, x, y):
-        v = self.inset
-        b = v["box"]
-        return (b.left + (x - v["x0"]) / v["x_span"] * b.w,
-                b.bottom - (y - v["y0"]) / v["y_span"] * b.h)
-
-    def _draw_inset(self, surf):
-        v = self.inset
-        box = v["box"]
-
-        # mark the zoomed region on the main plot and connect it to the inset
-        x0, x1, y0, y1 = v["region"]
-        (ax, ay), (bx, by) = self.to_px(x0, y1), self.to_px(x1, y0)
-        marker = pygame.Rect(0, 0, max(bx - ax, 8), max(by - ay, 8))
-        marker.center = ((ax + bx) / 2, (ay + by) / 2)
-        pygame.draw.rect(surf, MUTED, marker, 1)
-        pygame.draw.line(surf, CIRCLE, marker.topright, box.topleft)
-        pygame.draw.line(surf, CIRCLE, marker.bottomright, box.bottomleft)
-
-        pygame.draw.rect(surf, PANEL_BG, box)
-        pygame.draw.rect(surf, MUTED, box, 1)
-        clip = surf.get_clip()
-        surf.set_clip(box.inflate(-2, -2))
-        pts = self.inset_points[: INSET_COLLISIONS + 1]
-        colors = viridis(np.arange(len(pts)) / self.total)  # same color scale as the main plot
-        px = [self._inset_px(x, y) for x, y in pts]
-        for i in range(1, len(px)):
-            pygame.draw.aaline(surf, colors[i], px[i - 1], px[i])
-        for p, c in zip(px, colors):
-            pygame.draw.circle(surf, c, (round(p[0]), round(p[1])), 3)
-        if px:
-            pygame.draw.circle(surf, INK, (round(px[0][0]), round(px[0][1])), 5, 1)
-        surf.set_clip(clip)
-
-        label = self.small_font.render(f"first {INSET_COLLISIONS} collisions", True, MUTED)
-        surf.blit(label, label.get_rect(midbottom=(box.centerx, box.top - 2)))
-        if v["stretch"] > 1.5:
-            note = self.small_font.render(f"x stretched ×{v['stretch']:,.0f}", True, MUTED)
-            surf.blit(note, note.get_rect(midtop=(box.centerx, box.bottom + 2)))
+        bbox = ax.get_window_extent()
+        axes_rect = pygame.Rect(round(bbox.x0), round(height - bbox.y1), round(bbox.width), round(bbox.height))
+        return surface, to_px, axes_rect
 
     # ----- per frame -----
     def consume(self):
@@ -207,28 +99,38 @@ class PhasePanel:
         rows = self.sim.recorded
         if len(rows) == 0:
             return
-        ks = rows[:, 0].astype(np.int64)
-        xs, ys = self.sim.phase_point(rows[:, 1], rows[:, 2])
-        colors = viridis(ks / self.total)
-        r = self.dot_radius
-        for k, x, y, color in zip(ks, xs, ys, colors):
-            point = (float(x), float(y))
-            px = self.to_px(*point)
-            prev_k, prev_point = self.prev
-            if k <= self.line_limit and k == prev_k + 1:
-                pygame.draw.aaline(self.trail, color, self.to_px(*prev_point), px)
-            if k <= INSET_COLLISIONS:
-                self.inset_points.append(point)
-            pygame.draw.circle(self.trail, color, (round(px[0]), round(px[1])), r)
-            self.prev = (k, point)
+        x, y = self.sim.phase_point(rows[:, 1], rows[:, 2])
+        px, py = self._to_px(x * self.radius, y * self.radius)
+        points = list(zip(px.tolist(), py.tolist()))
+
+        line = ([self.last_px] if self.last_px else []) + points
+        if len(line) > 1:
+            pygame.draw.lines(self.canvas, LINE_BLUE, False, line, self.line_width)
+        r = self.marker_radius
+        self.canvas.blits([(self.marker, (round(x) - r, round(y) - r)) for x, y in points], doreturn=False)
+        self.last_px = points[-1]
+
+    def _draw_legend(self, window):
+        """Upper-right legend like matplotlib's, with a live collision count."""
+        s = self.scale
+        label = self.legend_font.render(f"Collisions: {self.sim.collisions}", True, TEXT)
+        handle_w = round(20 * s)
+        pad = round(4 * s)
+        w = pad + handle_w + round(8 * s) + label.get_width() + pad * 2
+        h = label.get_height() + pad * 2
+        box = pygame.Rect(0, 0, w, h)
+        box.topright = (self.rect.x + self.axes_rect.right - round(5 * s),
+                        self.rect.y + self.axes_rect.top + round(5 * s))
+
+        legend = pygame.Surface(box.size, pygame.SRCALPHA)
+        pygame.draw.rect(legend, (255, 255, 255, 205), legend.get_rect(), border_radius=round(3 * s))
+        pygame.draw.rect(legend, LEGEND_EDGE, legend.get_rect(), 1, border_radius=round(3 * s))
+        mid = h // 2
+        pygame.draw.line(legend, LINE_BLUE, (pad, mid), (pad + handle_w, mid), self.line_width)
+        pygame.draw.circle(legend, LINE_BLUE, (pad + handle_w // 2, mid), self.marker_radius)
+        legend.blit(label, (pad + handle_w + round(8 * s), pad))
+        window.blit(legend, box)
 
     def draw(self, window):
-        surf = self.background.copy()
-        surf.blit(self.trail, (0, 0))
-        if self.inset is not None:
-            self._draw_inset(surf)
-        # current state
-        x, y = self.sim.phase_point(self.sim.v_small, self.sim.v_big)
-        cx, cy = self.to_px(x, y)
-        pygame.draw.circle(surf, INK, (round(cx), round(cy)), 6, 2)
-        window.blit(surf, self.rect)
+        window.blit(self.canvas, self.rect)
+        self._draw_legend(window)

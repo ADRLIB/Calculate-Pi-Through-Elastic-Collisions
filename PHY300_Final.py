@@ -87,9 +87,6 @@ class App:
         self.font = pygame.font.SysFont("Cascadia", 28, bold=True)
         self.small_font = pygame.font.SysFont("Cascadia", 20)
         self.pi_font = pygame.font.SysFont("Cascadia Mono, Menlo, Courier New", 34, bold=True)
-        # Panel fonts need the √ θ π · glyphs
-        self.panel_font = pygame.font.SysFont("Helvetica, Arial, DejaVu Sans", 20, bold=True)
-        self.panel_small_font = pygame.font.SysFont("Helvetica, Arial, DejaVu Sans", 14)
 
         self.clock = pygame.time.Clock()
         self.speed_index = SPEEDS.index(1.0)
@@ -102,8 +99,7 @@ class App:
             self.n_digits = max(MIN_DIGITS, min(MAX_DIGITS, n_digits))
         self.sim = new_simulation(self.n_digits)
         # Exact final count (fast, numba) sets the panel's color scale and sampling
-        self.panel = PhasePanel(PANEL_RECT, self.sim, count_collisions(self.n_digits),
-                                self.panel_font, self.panel_small_font)
+        self.panel = PhasePanel(PANEL_RECT, self.sim, count_collisions(self.n_digits))
 
     @property
     def speed(self):
