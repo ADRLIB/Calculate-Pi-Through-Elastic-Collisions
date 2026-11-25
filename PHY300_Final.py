@@ -15,14 +15,15 @@ import sys
 from pathlib import Path
 
 import pygame
-from PIL import Image, ImageFilter
 
-from pi_collisions import CollisionSimulation
+from phase_panel import PhasePanel
+from pi_collisions import CollisionSimulation, count_collisions
 
 # Resolve assets relative to this file so the script runs from any directory
 ASSETS = Path(__file__).resolve().parent / "assets"
 
-WIDTH, HEIGHT = 1100, 400
+WIDTH, HEIGHT = 1160, 400
+PANEL_RECT = pygame.Rect(WIDTH - 390, 10, 380, 380)
 FPS = 60
 MIN_DIGITS, MAX_DIGITS = 1, 8  # n = 9 works, but takes ~30 s of wall time to play
 SPEEDS = [0.1, 0.25, 0.5, 1.0, 2.0, 4.0]
@@ -43,15 +44,6 @@ FLOOR = pygame.Rect(50, 300, 670, 10)
 WALL = pygame.Rect(50, 150, 5, 150)
 BALL_Y = FLOOR.y - RADIUS  # balls rest on top of the floor
 START_X_SMALL, START_X_BIG, START_V_BIG = 200.0, 380.0, -50.0
-
-
-def load_phase_image(n_digits):
-    """Pre-rendered phase-space plot for n = 1..5, or None if there isn't one."""
-    path = ASSETS / "phase_images" / f"n_{n_digits}.png"
-    if not path.exists():
-        return None
-    image = Image.open(path).resize((350, 350)).filter(ImageFilter.SHARPEN)
-    return pygame.image.fromstring(image.tobytes(), image.size, image.mode)
 
 
 def new_simulation(n_digits):
@@ -95,6 +87,9 @@ class App:
         self.font = pygame.font.SysFont("Cascadia", 28, bold=True)
         self.small_font = pygame.font.SysFont("Cascadia", 20)
         self.pi_font = pygame.font.SysFont("Cascadia Mono, Menlo, Courier New", 34, bold=True)
+        # Panel fonts need the √ θ π · glyphs
+        self.panel_font = pygame.font.SysFont("Helvetica, Arial, DejaVu Sans", 20, bold=True)
+        self.panel_small_font = pygame.font.SysFont("Helvetica, Arial, DejaVu Sans", 14)
 
         self.clock = pygame.time.Clock()
         self.speed_index = SPEEDS.index(1.0)
@@ -106,7 +101,9 @@ class App:
         if n_digits is not None:
             self.n_digits = max(MIN_DIGITS, min(MAX_DIGITS, n_digits))
         self.sim = new_simulation(self.n_digits)
-        self.phase_image = load_phase_image(self.n_digits)
+        # Exact final count (fast, numba) sets the panel's color scale and sampling
+        self.panel = PhasePanel(PANEL_RECT, self.sim, count_collisions(self.n_digits),
+                                self.panel_font, self.panel_small_font)
 
     @property
     def speed(self):
@@ -143,6 +140,7 @@ class App:
         # Jump through every collision that happens during this frame
         # (after the last one the balls just keep coasting apart)
         new_collisions = self.sim.advance(frame_time * self.speed)
+        self.panel.consume()
         now = pygame.time.get_ticks()
         if new_collisions and not self.muted and now - self.last_sound_ms >= SOUND_MIN_INTERVAL_MS:
             self.sound.play()
@@ -181,8 +179,6 @@ class App:
     def draw(self):
         self.window.fill(BACKGROUND)
 
-        if self.phase_image is not None:
-            self.window.blit(self.phase_image, (WIDTH - 360, 10))
 
         pygame.draw.rect(self.window, INK, FLOOR)
         pygame.draw.rect(self.window, INK, WALL)
@@ -192,10 +188,11 @@ class App:
         self.text(f"Collisions: {self.sim.collisions:,}", (10, 10))
         self.text(f"Big ball velocity: {self.sim.v_big:.2f}", (10, 40))
         self.text(f"n_digits: {self.n_digits}", (10, 70))
-        self.draw_pi((470, 150))
+        self.draw_pi((470, 100))  # kept above the balls' lane (y >= 210)
+        self.panel.draw(self.window)  # last, so balls rolling away pass behind it
 
         status = "PAUSED" if self.paused else ("DONE" if self.sim.finished else f"speed {self.speed:g}x")
-        self.text(status, (470, 240), self.small_font, MUTED)
+        self.text(status, (470, 182), self.small_font, MUTED)
         self.text(
             "Up/Down digits   Left/Right speed   Space pause   R restart   M mute",
             (10, HEIGHT - 26),

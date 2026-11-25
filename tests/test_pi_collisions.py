@@ -41,3 +41,29 @@ def test_advance_respects_event_budget():
     sim.advance(1e6, max_events=1000)
     assert sim.collisions == 1000
     assert not sim.finished
+
+
+def _collect(sim, dt=0.05):
+    rows = []
+    while not sim.finished:
+        sim.advance(dt)
+        rows.extend(sim.recorded.tolist())  # recorded is overwritten by the next advance
+    return rows
+
+
+def test_recording_every_collision_lies_on_unit_circle():
+    sim = CollisionSimulation(4)
+    sim.enable_recording(stride=1)
+    rows = _collect(sim)
+    assert [int(k) for k, _, _ in rows] == list(range(1, 3142))
+    for _, v1, v2 in rows:
+        x, y = sim.phase_point(v1, v2)
+        assert x * x + y * y == pytest.approx(1.0, rel=1e-9)
+
+
+def test_recording_stride_keeps_dense_prefix_and_every_kth():
+    sim = CollisionSimulation(5)
+    sim.enable_recording(stride=100, dense=40)
+    ks = [int(k) for k, _, _ in _collect(sim)]
+    expected = sorted(set(range(1, 41)) | set(range(100, 31416, 100)))
+    assert ks == expected
