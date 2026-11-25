@@ -1,7 +1,11 @@
 import math
-import numpy as np
-import pygame 
+from pathlib import Path
+
+import pygame
 from PIL import Image, ImageFilter
+
+# Resolve assets relative to this file so the script runs from any directory
+ASSETS = Path(__file__).resolve().parent / "assets"
 
 pygame.mixer.init() #strictly for sound
 pygame.init()
@@ -9,13 +13,13 @@ pygame.init()
 WIDTH, HEIGHT = 1000, 400
 window = pygame.display.set_mode((WIDTH,HEIGHT))
 
-## customizing 
+## customizing
 pygame.display.set_caption("PI COLLISION SIMULATOR")
-icon = pygame.image.load("sound_and_images/pieImage.jpg")  # Replace with the path to your icon
+icon = pygame.image.load(ASSETS / "pieImage.jpg")
 pygame.display.set_icon(icon)
 
 ##addition of sound lol
-collision_sound = pygame.mixer.Sound('sound_and_images/boop.mp3')  # Correctly load the sound
+collision_sound = pygame.mixer.Sound(ASSETS / "boop.mp3")
 
 ##creating a definition for object
 class CircularObject:
@@ -173,17 +177,11 @@ def run():
     clock = pygame.time.Clock()
 
     ## image of phases 
-    image_phases = {
-        1: 'sound_and_images/phaseImages/n_1(image).png',
-        2: 'sound_and_images/phaseImages/n_2(image).png',
-        3: 'sound_and_images/phaseImages/n_3(image).png',
-        4: 'sound_and_images/phaseImages/n_4(image).png',
-        5: 'sound_and_images/phaseImages/n_5(image).png',
-    }
-
-    # Select the image path based on n_digits I used this different method because It makes images more clear
-    image_path = image_phases.get(n_digits, 'sound_and_images/phaseImages/n_1(image).png')  # Default to n_1(image).png if n_digits is not in the dictionary
-    image = Image.open(image_path)  
+    # Select the phase image for n_digits (pre-rendered images exist for n = 1..5; fall back to n_1)
+    image_path = ASSETS / "phase_images" / f"n_{n_digits}.png"
+    if not image_path.exists():
+        image_path = ASSETS / "phase_images" / "n_1.png"
+    image = Image.open(image_path)
     image = image.resize((350, 350))  
     image = image.filter(ImageFilter.SHARPEN)  
 
