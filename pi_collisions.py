@@ -64,6 +64,45 @@ def count_collisions(n_digits):
             return count
 
 
+@njit(cache=True)
+def _phase_points(n_digits, stride, capacity):
+    m1 = 1.0
+    m2 = 100.0 ** (n_digits - 1)
+    sqrt_m1, sqrt_m2 = math.sqrt(m1), math.sqrt(m2)
+    v1, v2 = 0.0, -1.0
+    xs = np.empty(capacity)
+    ys = np.empty(capacity)
+    count = 0
+    n = 0
+    while True:
+        if v2 < v1:
+            v1, v2 = _collide(v1, v2, m1, m2)
+        elif v1 < 0.0:
+            v1 = -v1
+        else:
+            return xs[:n], ys[:n], count
+        count += 1
+        if count % stride == 0 and n < capacity:
+            xs[n] = sqrt_m2 * v2
+            ys[n] = sqrt_m1 * v1
+            n += 1
+
+
+def phase_space_points(n_digits, max_points=None):
+    """Phase-space points (x, y) = (sqrt(M) v_big, sqrt(m) v_small) after each collision.
+
+    Same setup as the notebook (small ball at rest, big ball at speed -1), so
+    the points lie on a circle of radius sqrt(M). With `max_points`, only every
+    k-th collision is kept (k odd, because collisions alternate ball-ball/wall
+    and an even k would only ever sample wall bounces).
+
+    Returns (xs, ys, total_collisions).
+    """
+    total = count_collisions(n_digits)
+    stride = 1 if max_points is None else max(1, total // max_points) | 1
+    return _phase_points(n_digits, stride, total // stride + 1)
+
+
 # Indices into the simulation state array
 T, X1, V1, X2, V2 = 0, 1, 2, 3, 4
 

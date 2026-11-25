@@ -67,3 +67,16 @@ def test_recording_stride_keeps_dense_prefix_and_every_kth():
     ks = [int(k) for k, _, _ in _collect(sim)]
     expected = sorted(set(range(1, 41)) | set(range(100, 31416, 100)))
     assert ks == expected
+
+
+def test_phase_space_points_lie_on_circle():
+    from pi_collisions import phase_space_points
+
+    xs, ys, total = phase_space_points(4)
+    assert total == 3141 and len(xs) == 3141
+    radius_sq = 100.0 ** 3  # M, with the big ball starting at speed 1
+    assert all(abs(x * x + y * y - radius_sq) < 1e-6 * radius_sq for x, y in zip(xs, ys))
+
+    xs, ys, total = phase_space_points(8, max_points=20_000)
+    assert total == 31415926 and 10_000 < len(xs) <= 20_001
+    assert (ys > 0).any() and (ys < 0).any()  # odd stride samples both halves

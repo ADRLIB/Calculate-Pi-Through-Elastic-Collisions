@@ -38,7 +38,7 @@ The panel next to the simulation draws this plot live, in the same matplotlib st
 - `phase_panel.py` - The live phase-space plot (matplotlib-style) drawn beside the simulation.
 - `pi_collisions.py` - The physics engine. It is event-driven: rather than stepping time forward in tiny increments and checking for overlaps (which let the fast small ball tunnel through the big one and lose collisions from n = 4 up), it solves for the exact moment of each next collision and jumps straight to it. Compiled with numba, it counts 31,415,926 collisions (n = 8) in under a tenth of a second. Run `python pi_collisions.py` for a timing table.
 - `tests/` - Checks that the collision counts match the digits of pi, that energy is conserved, and that the balls never pass through each other. Run with `python -m pytest`.
-- `Phase_Space.ipynb` - Jupyter notebook that graphs all the points by running a simulation itself. Multiple cells that do the same thing.
+- `Phase_Space.ipynb` - Jupyter notebook: checks the collision counts against pi for n = 1–9, times our original pure-Python loop against the numba engine (about 45x faster), and plots the phase-space circles for n = 1–8. Open with `jupyter notebook Phase_Space.ipynb`.
 - `assets/boop.mp3` - the sound made when objects collide.
 - `assets/pieImage.jpg` - the window icon.
 - `assets/screenshot.png` - the screenshot above.
