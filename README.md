@@ -7,12 +7,21 @@ This is a final project for my computational physics class in the Fall Semester 
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python PHY300_Final.py
+python PHY300_Final.py        # optional: number of digits, e.g. python PHY300_Final.py 7
 ```
+
+| Key | Action |
+|---|---|
+| Up / Down | More / fewer digits of pi (1–8), restarts the run |
+| Left / Right | Slow down / speed up time (0.1x – 4x) |
+| Space | Pause / resume |
+| R | Restart |
+| M | Mute / unmute |
+| Esc | Quit |
 
 ## Files
 
-- `PHY300_Final.py` - The pygame visualization. Set `n_digits` near the top of the file.
+- `PHY300_Final.py` - The pygame visualization: the collision count is read live as digits of pi, which turn green once the run finishes and they match.
 - `pi_collisions.py` - The physics engine. It is event-driven: rather than stepping time forward in tiny increments and checking for overlaps (which let the fast small ball tunnel through the big one and lose collisions from n = 4 up), it solves for the exact moment of each next collision and jumps straight to it. Compiled with numba, it counts 31,415,926 collisions (n = 8) in under a tenth of a second. Run `python pi_collisions.py` for a timing table.
 - `tests/` - Checks that the collision counts match the digits of pi, that energy is conserved, and that the balls never pass through each other. Run with `python -m pytest`.
 - `Phase_Space.ipynb` - Jupyter notebook that graphs all the points by running a simulation itself. Multiple cells that do the same thing.
